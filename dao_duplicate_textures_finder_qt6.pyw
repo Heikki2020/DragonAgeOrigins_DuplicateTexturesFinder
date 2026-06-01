@@ -46,7 +46,9 @@ def pil_to_qpixmap(pil_image):
         qimage = QImage(
             data, pil_image.width, pil_image.height, QImage.Format.Format_RGB888
         )
-    return QPixmap.fromImage(qimage)
+    pixmap = QPixmap.fromImage(qimage)
+    del data
+    return pixmap
 
 
 class DuplicateFinder(QThread):
@@ -168,39 +170,28 @@ class ImagePreviewWidget(QWidget):
                 width, height = img.size
                 mode = img.mode
 
+                if img.mode in ("LA", "P"):
+                    img = img.convert("RGBA")
+                elif img.mode != "RGBA":
+                    img = img.convert("RGB")
+
+                img.thumbnail((384, 384), Image.Resampling.LANCZOS)
+                pixmap = pil_to_qpixmap(img)
+
             filename = os.path.basename(self.file_path)
             self.info_label.setText(
                 f"{filename}\n{width}×{height} px | {mode}\n{size_str}"
             )
-            self.load_pixmap_from_pil()
+            self.image_label.setPixmap(pixmap)
         except Exception:
             self.info_label.setText(
                 f"Error loading:\n{os.path.basename(self.file_path)}"
             )
             self.image_label.setText("Error")
 
-    def load_pixmap_from_pil(self):
-        try:
-            with Image.open(self.file_path) as img:
-                if img.mode in ("RGBA", "LA", "P"):
-                    if img.mode == "P":
-                        img = img.convert("RGBA")
-                else:
-                    img = img.convert("RGB")
-                img.thumbnail((384, 384), Image.Resampling.LANCZOS)
-                pixmap = pil_to_qpixmap(img)
-                self.image_label.setPixmap(pixmap)
-        except Exception:
-            self.image_label.setText("Preview\nUnavailable")
-
     def open_file(self):
         try:
-            if sys.platform == "win32":
-                os.startfile(self.file_path)
-            elif sys.platform == "darwin":
-                os.system(f"open '{self.file_path}'")
-            else:
-                os.system(f"xdg-open '{self.file_path}'")
+            os.startfile(self.file_path)
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Could not open file:\n{str(e)}")
 
@@ -226,9 +217,10 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(
-            "Dragon Age: Origins - Duplicate Textures Finder - 1.0 - © Henry & Lukas 2025-2026"
+            "Dragon Age: Origins - Duplicate Textures Finder - 1.1 - © Henry & Lukas 2025-2026"
         )
-        self.setGeometry(100, 100, 1200, 600)
+        self.setGeometry(100, 100, 1280, 720)
+        self.showMaximized()
 
         palette = QPalette()
         palette.setColor(QPalette.ColorRole.Window, QColor(30, 30, 30))
@@ -368,6 +360,11 @@ class MainWindow(QMainWindow):
     def start_scan(self):
         if not self.selected_folder or not os.path.exists(self.selected_folder):
             return
+        if hasattr(self, "finder") and self.finder.isRunning():
+            self.finder.finished.disconnect()
+            self.finder.error.disconnect()
+            self.finder.quit()
+            self.finder.wait()
         self.statusBar().showMessage("Scanning...")
         self.duplicate_groups = {}
         self.groups_tree.clear()
@@ -384,7 +381,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Scan complete – No duplicates found")
             self.clear_comparison_view()
             return
-        for full_name, paths in duplicates.items():
+        for full_name, paths in sorted(duplicates.items()):
             item = QTreeWidgetItem([f"{full_name} ({len(paths)} files)"])
             item.setData(0, Qt.ItemDataRole.UserRole, full_name)
             self.groups_tree.addTopLevelItem(item)
